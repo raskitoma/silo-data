@@ -1,0 +1,15 @@
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: ${TABLE_PREFIX}_influx_mysql_bridge
+    env_file: .env
+    restart: unless-stopped
+    network_mode: host        # InfluxDB and MySQL are on the host LAN (per spec A6)
+    stop_grace_period: 15s    # honour graceful SIGTERM (per spec A17)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
