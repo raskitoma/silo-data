@@ -49,7 +49,7 @@ def _ensure_pool(cfg: Config) -> MySQLConnectionPool:
             autocommit=True,
             connection_timeout=10,
             charset="utf8mb4",
-            collation="utf8mb4_0900_ai_ci",
+            collation="utf8mb4_general_ci",
         )
     return _pool
 
@@ -81,7 +81,7 @@ def _build_create_ddl(cfg: Config) -> str:
         f"    UNIQUE KEY uq_point (time_recorded, measurement, field_name),\n"
         f"    KEY idx_time (time_recorded),\n"
         f"    KEY idx_field_time (field_name, time_recorded)\n"
-        f") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+        f") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci"
     )
 
 
