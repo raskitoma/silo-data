@@ -156,36 +156,4 @@ Static parts verified; live parts require docker.
 | 6 | Tag-values multi-prompt: dedup, regex, max 64 | **[verified]** in code |
 | 7 | Update mode → `.env.bak.<unix-ts>` mode 600, identical content | **[verified]** in code |
 | 8 | Bad Influx token → exit 3, no build | **[verified]** in code (`die_with_code 3` before `docker compose build`) |
-| 9 | Unreachable MySQL → exit 3, no build | **[verified]** in code |
-| 10 | Successful preflight + decline `y` → no `docker compose up` | **[verified]** in code |
-| 11 | Accept `y` → bridge `Up`, healthy within 60 s | **operator-pending** |
-| 12 | Regex blocks in deploy.sh and config.py byte-identical | **[verified]** by inspection — see "regex parity" below |
-
-### Regex parity
-
-| Regex | `app/config.py` | `deploy.sh` |
-|---|---|---|
-| identifier | `^[a-z][a-z0-9_]{0,30}$` | `^[a-z][a-z0-9_]{0,30}$` |
-| flux string | `^[A-Za-z0-9_\-./]{1,128}$` | `^[A-Za-z0-9_./-]{1,128}$` |
-| tag value | `^[A-Za-z0-9_\-./]{1,64}$` | `^[A-Za-z0-9_./-]{1,64}$` |
-| URL | `^https?://[A-Za-z0-9.\-]+(:[0-9]+)?$` | `^https?://[A-Za-z0-9.-]+(:[0-9]+)?$` |
-
-Bash's ERE rejects an unescaped `\-` mid-class so the bash version uses `_./-` (dash at the end of the class is literal). Python's `re` also accepts a literal dash at the end of a class but the spec form uses `\-` for clarity. The character sets are equivalent.
-
----
-
-## M6 — README & operator handover
-
-`README.md` is committed and covers every section the spec requires (env table, schema, operations, healthcheck inspection, troubleshooting with six cases, reset procedure, time-sync, layout). Operator runs the quickstart on a clean VM to satisfy the M6 PASS CRITERIA.
-
----
-
-## What you need to run before declaring done
-
-1. `shellcheck deploy.sh` — zero warnings.
-2. `python -m py_compile app/*.py` — all compile.
-3. Fill `.env` and run `./deploy.sh` end-to-end.
-4. Run the smoke tests in `SPEC.md` §11 (Operator Acceptance Runbook).
-5. Confirm M2 row #6 (chunked inserts) and M4 rows #1, #2, #3, #5–#6, #12 against the live stack.
-
-If anything fails the criterion as written, file the failure rather than weaken the criterion.
+| 9 | Unreachable MySQL → exit 3, no build | **[veri

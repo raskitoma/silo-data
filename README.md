@@ -193,21 +193,4 @@ Both the watermark filter and the Flux `range(start: -Ns)` rely on the host cloc
 ```
 .
 ├── app/
-│   ├── main.py            # Loop (signal-safe), heartbeat, dry-run
-│   ├── db.py              # Pool, ensure_table, schema verify, chunked INSERT IGNORE
-│   ├── influx.py          # Flux query + Row mapping
-│   ├── config.py          # Env validation; SystemExit(2) on bad input
-│   ├── log.py             # JSON-line logger + 60s error rate-limit
-│   ├── requirements.txt
-│   └── Dockerfile
-├── deploy.sh              # Wizard with preflight probes and .env backup
-├── docker-compose.yml
-├── .env.example
-├── README.md
-├── SPEC.md                # Full specification (binding)
-└── VERIFICATION.md        # M2–M4 PASS CRITERIA the operator must run on the live stack
-```
-
-## License
-
-Internal — easyfoods.
+│   ├── main.py          
