@@ -3,7 +3,7 @@
 **For:** an autonomous coding agent (Open Claude / Claude Code).
 **Target host OS:** Ubuntu 22.04 / 24.04 LTS.
 **Target stack:** InfluxDB 2.x (Flux) → MySQL 8.4 LTS, via a single Dockerised Python daemon.
-**Operator workflow:** one bridge container fans out across all configured silos for a single (measurement, field) pair.
+**Operator workflow:** one bridge container ingests one Influx measurement and fans out across an allowlist of `_field` names. There is no tag dimension in scope; the row's `field_name` is the dimension.
 **Mandate:** read §0 in full, then §1, then build §7 milestone-by-milestone. Do not advance past a milestone until every PASS CRITERION holds. Do not invent scope.
 
 ---
@@ -40,9 +40,9 @@ Defaults shown in **bold**. These were resolved with the operator. If a future c
 
 | # | Question | Resolution |
 |---|---|---|
-| A1 | "Silo" semantics | **A literal corn silo.** One Influx tag value per silo. Many silos contribute data to the same `_measurement`/`_field`; they are distinguished by the tag value. |
+| A1 | "Silo" semantics | **A literal corn silo / domain term only.** The operator's Influx schema does NOT use tags to differentiate silos; multiple `_field` names under one `_measurement` carry the per-silo / per-grain values. The bridge therefore takes a list of `INFLUX_FIELDS` and inserts one row per `(measurement, field)` per poll. |
 | A2 | Raw points or windowed mean | **Windowed mean** — Flux uses `aggregateWindow(every: ${POLL_INTERVAL_SECONDS}s, fn: mean, createEmpty: false)`. `field_value` therefore stores the per-window mean, never a raw sample. |
-| A3 | Window vs. interval timing / dedup | **Both safety nets:** a `UNIQUE KEY` on `(time_recorded, measurement, field_name, <TAG_KEY>)` plus an in-process `last_t` watermark to skip redundant inserts. Inserts use `INSERT IGNORE`. |
+| A3 | Window vs. interval timing / dedup | **Both safety nets:** a `UNIQUE KEY` on `(time_recorded, measurement, field_name)` plus an in-process `last_t` watermark to skip redundant inserts. Inserts use `INSERT IGNORE`. |
 | A4 | Time precision | **Microsecond.** Influx ns → MySQL `DATETIME(6)`. Aggregated means do not need ns. |
 | A5 | Timezone | **UTC, naive.** README documents this so analysts don't reinterpret. |
 | A6 | Networking | **Host LAN.** `network_mode: host` on the bridge service. |
@@ -51,9 +51,9 @@ Defaults shown in **bold**. These were resolved with the operator. If a future c
 | A9 | Dry-run with zero rows | **Warn-and-proceed if operator confirms.** Empty bucket is a valid first-deploy state. |
 | A10 | MySQL auth plugin | **`caching_sha2_password` (MySQL 8.4 default) supported via `mysql-connector-python` 9.x.** README troubleshooting lists symptom + fix. |
 | A11 | Stack version | **MySQL 8.4 LTS** (operator confirmed). MariaDB compatibility is preserved at the driver level but not specifically validated. InfluxDB 2.x. |
-| A12 | Tag key naming | **Configurable env `INFLUX_TAG_KEY`. The MySQL column uses the same name.** Validated against `^[a-z][a-z0-9_]{0,30}$` so it can be safely interpolated into DDL. |
-| A13 | Tag value selection | **Allowlist via env `INFLUX_TAG_VALUES=silo_1,silo_2,silo_3`.** Flux filters with `contains()`. New silos require env update + restart — explicit, no silent fan-out growth. |
-| A14 | Schema reset on tag-key change | **Operator-driven `DROP TABLE` + restart.** No automatic migration. Source of truth is Influx; rebuilding the MySQL mirror is cheap. README documents the procedure. |
+| A12 | Field allowlist | **Comma-separated env `INFLUX_FIELDS=wheat_level,white_corn_level,…`.** Flux filters via `contains(value: r["_field"], set: fields)`. New fields require env update + restart — explicit, no silent fan-out growth. There is no tag dimension. |
+| A13 | (intentionally vacated) | Was "tag value selection" in an earlier draft. The operator clarified there are no tags in their schema. The single allowlist now lives in A12. |
+| A14 | Schema reset on missing column | **Operator-driven `DROP TABLE` + restart.** No automatic migration. Source of truth is Influx; rebuilding the MySQL mirror is cheap. README documents the procedure. |
 | A15 | Polling configurability | **`POLL_INTERVAL_SECONDS` env, default 10, range [5, 3600].** `QUERY_WINDOW_SECONDS` default 20, must be ≥ 2 × poll interval. |
 | A16 | Liveness vs. process-exit detection | **Heartbeat file `/tmp/last_poll.json` + Docker `HEALTHCHECK`.** A stuck (hung) process is detected externally because `restart: unless-stopped` only fires on actual exits. |
 | A17 | Shutdown semantics | **SIGTERM is graceful** — current iteration finishes, heartbeat is written, process exits 0 within ≤1s of receipt. |

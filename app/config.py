@@ -9,13 +9,11 @@ import sys
 from dataclasses import dataclass
 
 
-# Identifier regex — used for both DDL identifiers (TABLE_PREFIX, INFLUX_TAG_KEY)
-# so they can be safely interpolated into SQL/Flux.
+# Identifier regex — used for TABLE_PREFIX so it can be safely interpolated
+# into SQL identifiers.
 _PREFIX_RE = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 # General Flux/Influx string regex.
 _FLUX_STR_RE = re.compile(r"^[A-Za-z0-9_\-./]{1,128}$")
-# Tag value regex — slightly tighter length.
-_TAG_VALUE_RE = re.compile(r"^[A-Za-z0-9_\-./]{1,64}$")
 _URL_RE = re.compile(r"^https?://[A-Za-z0-9.\-]+(:[0-9]+)?$")
 
 
@@ -27,9 +25,7 @@ class Config:
     influx_org: str
     influx_bucket: str
     influx_measurement: str
-    influx_field: str
-    influx_tag_key: str
-    influx_tag_values: tuple[str, ...]   # ordered, deduplicated
+    influx_fields: tuple[str, ...]   # ordered, deduplicated allowlist
     mysql_host: str
     mysql_port: int
     mysql_user: str
@@ -66,7 +62,7 @@ def _int_in_range(var: str, default: int | None, lo: int, hi: int) -> int:
         n = int(raw)
     except ValueError:
         _fail(var, "not_int")
-        return 0  # unreachable; satisfies type checker
+        return 0
     if not (lo <= n <= hi):
         _fail(var, "range")
     return n
@@ -92,22 +88,16 @@ def load_config() -> Config:
     influx_measurement = _required("INFLUX_MEASUREMENT")
     _matches("INFLUX_MEASUREMENT", influx_measurement, _FLUX_STR_RE)
 
-    influx_field = _required("INFLUX_FIELD")
-    _matches("INFLUX_FIELD", influx_field, _FLUX_STR_RE)
-
-    influx_tag_key = _required("INFLUX_TAG_KEY")
-    _matches("INFLUX_TAG_KEY", influx_tag_key, _PREFIX_RE)
-
-    raw_values = _required("INFLUX_TAG_VALUES")
-    parts = [p.strip() for p in raw_values.split(",") if p.strip()]
+    raw_fields = _required("INFLUX_FIELDS")
+    parts = [p.strip() for p in raw_fields.split(",") if p.strip()]
     if not parts:
-        _fail("INFLUX_TAG_VALUES", "empty")
+        _fail("INFLUX_FIELDS", "empty")
     if len(parts) > 64:
-        _fail("INFLUX_TAG_VALUES", "too_many")
+        _fail("INFLUX_FIELDS", "too_many")
     seen: list[str] = []
     for p in parts:
-        if not _TAG_VALUE_RE.match(p):
-            _fail("INFLUX_TAG_VALUES", f"regex:{p}")
+        if not _FLUX_STR_RE.match(p):
+            _fail("INFLUX_FIELDS", f"regex:{p}")
         if p not in seen:
             seen.append(p)
 
@@ -129,9 +119,7 @@ def load_config() -> Config:
         influx_org=influx_org,
         influx_bucket=influx_bucket,
         influx_measurement=influx_measurement,
-        influx_field=influx_field,
-        influx_tag_key=influx_tag_key,
-        influx_tag_values=tuple(seen),
+        influx_fields=tuple(seen),
         mysql_host=mysql_host,
         mysql_port=mysql_port,
         mysql_user=mysql_user,

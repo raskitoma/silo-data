@@ -10,7 +10,6 @@ ENV_FILE="${REPO_ROOT}/.env"
 # Regex mirrors of app/config.py (M5 verifies these stay in sync).
 RE_PREFIX='^[a-z][a-z0-9_]{0,30}$'
 RE_FLUX_STR='^[A-Za-z0-9_./-]{1,128}$'
-RE_TAG_VALUE='^[A-Za-z0-9_./-]{1,64}$'
 RE_URL='^https?://[A-Za-z0-9.-]+(:[0-9]+)?$'
 
 declare -A VALS
@@ -19,6 +18,7 @@ STATE="fresh"
 red()    { printf '\033[31m%s\033[0m\n' "$*"; }
 green()  { printf '\033[32m%s\033[0m\n' "$*"; }
 yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
+dim()    { printf '\033[2m%s\033[0m\n' "$*"; }
 
 die_with_code() { local c="$1"; shift; red "$*" >&2; exit "$c"; }
 
@@ -47,6 +47,8 @@ load_existing() {
   done < "$ENV_FILE"
 }
 
+# prompt_value VAR LABEL REGEX [secret]
+# Single-value prompt. Detects common mistakes (commas, spaces) and explains them.
 prompt_value() {
   local var="$1" label="$2" regex="$3" secret="${4:-}"
   local current="${VALS[$var]:-}" hint="" val=""
@@ -63,7 +65,16 @@ prompt_value() {
     fi
     [[ -z "$val" && -n "$current" ]] && val="$current"
     if [[ -z "$val" ]]; then yellow "  (required)" >&2; continue; fi
-    if [[ -n "$regex" && ! "$val" =~ $regex ]]; then yellow "  invalid format" >&2; continue; fi
+    if [[ -n "$regex" && ! "$val" =~ $regex ]]; then
+      if [[ "$val" == *,* ]]; then
+        yellow "  invalid: this field accepts ONE value only — no commas." >&2
+      elif [[ "$val" == *' '* ]]; then
+        yellow "  invalid: no spaces allowed." >&2
+      else
+        yellow "  invalid format (allowed: letters, digits, _, -, ., /)." >&2
+      fi
+      continue
+    fi
     VALS[$var]="$val"; return 0
   done
 }
@@ -80,48 +91,95 @@ prompt_int() {
   done
 }
 
-prompt_tag_values() {
-  local current="${VALS[INFLUX_TAG_VALUES]:-}"
+# Multi-prompt for INFLUX_FIELDS — collects an allowlist of field names.
+# UX: prints a header, numbers each prompt, shows the running list, gives
+# specific errors for common mistakes (commas, spaces, duplicates).
+prompt_fields() {
+  local current="${VALS[INFLUX_FIELDS]:-}"
   if [[ -n "$current" ]]; then
-    echo "Current INFLUX_TAG_VALUES: $current" >&2
+    echo "" >&2
+    echo "Current INFLUX_FIELDS: $current" >&2
     printf 'Press Enter to keep, or type "edit" to redo: ' >&2
     local choice=""; read -r choice
     [[ "$choice" != "edit" ]] && return 0
   fi
-  local values=() v="" dup=""
+
+  echo "" >&2
+  green "INFLUX_FIELDS — the list of Influx _field names this bridge will ingest."
+  dim   "Enter ONE field name per line. Press Enter on a blank line when done."
+  dim   "Example fields: wheat_level, white_corn_level, yellow_corn_level"
+  echo "" >&2
+
+  local values=() v="" dup="" idx=1 collected=""
   while true; do
-    printf 'Add tag value (Enter to finish): ' >&2
+    if (( ${#values[@]} > 0 )); then
+      local IFS_TMP="$IFS"; IFS=', '; collected="${values[*]}"; IFS="$IFS_TMP"
+      printf '  Field #%d  [collected: %s]: ' "$idx" "$collected" >&2
+    else
+      printf '  Field #%d: ' "$idx" >&2
+    fi
     read -r v
     if [[ -z "$v" ]]; then
-      if (( ${#values[@]} == 0 )); then yellow "  at least one tag value is required" >&2; continue; fi
+      if (( ${#values[@]} == 0 )); then
+        yellow "  at least one field is required" >&2
+        continue
+      fi
       break
     fi
-    if [[ ! "$v" =~ $RE_TAG_VALUE ]]; then yellow "  invalid format" >&2; continue; fi
+    if [[ "$v" == *,* ]]; then
+      yellow "  enter ONE field at a time — no commas. (You'll be prompted again for the next.)" >&2
+      continue
+    fi
+    if [[ "$v" == *' '* ]]; then
+      yellow "  no spaces allowed in field names." >&2
+      continue
+    fi
+    if [[ ! "$v" =~ $RE_FLUX_STR ]]; then
+      yellow "  invalid format (allowed: letters, digits, _, -, ., / — max 128 chars)." >&2
+      continue
+    fi
     dup=""
     for existing in "${values[@]}"; do [[ "$existing" == "$v" ]] && dup="yes" && break; done
-    [[ -z "$dup" ]] && values+=("$v")
-    if (( ${#values[@]} >= 64 )); then yellow "  reached max of 64 tag values" >&2; break; fi
+    if [[ -n "$dup" ]]; then
+      yellow "  '$v' already added — pick another" >&2
+      continue
+    fi
+    values+=("$v")
+    idx=$((idx + 1))
+    if (( ${#values[@]} >= 64 )); then
+      yellow "  reached max of 64 fields" >&2
+      break
+    fi
   done
-  local IFS_BAK="$IFS"; IFS=','; VALS[INFLUX_TAG_VALUES]="${values[*]}"; IFS="$IFS_BAK"
+
+  local IFS_BAK="$IFS"; IFS=','; VALS[INFLUX_FIELDS]="${values[*]}"; IFS="$IFS_BAK"
+  green "  → ${#values[@]} field(s): ${VALS[INFLUX_FIELDS]}"
+  echo "" >&2
 }
 
 run_prompts() {
-  prompt_value TABLE_PREFIX        "TABLE_PREFIX (e.g. silo_farm_a)"  "$RE_PREFIX"
-  prompt_value INFLUX_URL          "INFLUX_URL (https://host:8086)"   "$RE_URL"
-  prompt_value INFLUX_TOKEN        "INFLUX_TOKEN"                     ""             secret
-  prompt_value INFLUX_ORG          "INFLUX_ORG"                       "$RE_FLUX_STR"
-  prompt_value INFLUX_BUCKET       "INFLUX_BUCKET"                    "$RE_FLUX_STR"
-  prompt_value INFLUX_MEASUREMENT  "INFLUX_MEASUREMENT"               "$RE_FLUX_STR"
-  prompt_value INFLUX_FIELD        "INFLUX_FIELD"                     "$RE_FLUX_STR"
-  prompt_value INFLUX_TAG_KEY      "INFLUX_TAG_KEY (e.g. silo)"       "$RE_PREFIX"
-  prompt_tag_values
-  prompt_value MYSQL_HOST          "MYSQL_HOST"                       ""
-  prompt_int   MYSQL_PORT          "MYSQL_PORT"                       1 65535 3306
-  prompt_value MYSQL_USER          "MYSQL_USER"                       ""
-  prompt_value MYSQL_PASSWORD      "MYSQL_PASSWORD"                   ""             secret
-  prompt_value MYSQL_DB            "MYSQL_DB"                         ""
-  prompt_int   POLL_INTERVAL_SECONDS "POLL_INTERVAL_SECONDS"          5 3600 10
-  prompt_int   QUERY_WINDOW_SECONDS  "QUERY_WINDOW_SECONDS"           1 86400 20
+  echo ""
+  green "── silo-data bridge configuration ─────────────────────────────────"
+  dim   "One bridge ingests ONE measurement and a list of fields from one"
+  dim   "Influx bucket into one MySQL table. Most prompts are single-value;"
+  dim   "INFLUX_FIELDS is a multi-prompt loop."
+  echo ""
+
+  prompt_value TABLE_PREFIX        "TABLE_PREFIX (e.g. silo_farm_a)"        "$RE_PREFIX"
+  prompt_value INFLUX_URL          "INFLUX_URL (e.g. http://10.0.0.5:8086)" "$RE_URL"
+  prompt_value INFLUX_TOKEN        "INFLUX_TOKEN"                           ""              secret
+  prompt_value INFLUX_ORG          "INFLUX_ORG (e.g. easyfoods)"            "$RE_FLUX_STR"
+  prompt_value INFLUX_BUCKET       "INFLUX_BUCKET (e.g. plc)"               "$RE_FLUX_STR"
+  prompt_value INFLUX_MEASUREMENT  "INFLUX_MEASUREMENT (single name, e.g. Silo)" "$RE_FLUX_STR"
+  prompt_fields
+  prompt_value MYSQL_HOST          "MYSQL_HOST"                             ""
+  prompt_int   MYSQL_PORT          "MYSQL_PORT"                             1 65535 3306
+  prompt_value MYSQL_USER          "MYSQL_USER"                             ""
+  prompt_value MYSQL_PASSWORD      "MYSQL_PASSWORD"                         ""              secret
+  prompt_value MYSQL_DB            "MYSQL_DB"                               ""
+  prompt_int   POLL_INTERVAL_SECONDS "POLL_INTERVAL_SECONDS"                5 3600 10
+  prompt_int   QUERY_WINDOW_SECONDS  "QUERY_WINDOW_SECONDS"                 1 86400 20
+
   local poll="${VALS[POLL_INTERVAL_SECONDS]}" win="${VALS[QUERY_WINDOW_SECONDS]}"
   if (( win < 2 * poll )); then
     die_with_code 2 "QUERY_WINDOW_SECONDS must be >= 2 * POLL_INTERVAL_SECONDS"
@@ -136,7 +194,7 @@ write_env() {
   fi
   {
     for k in TABLE_PREFIX INFLUX_URL INFLUX_TOKEN INFLUX_ORG INFLUX_BUCKET \
-             INFLUX_MEASUREMENT INFLUX_FIELD INFLUX_TAG_KEY INFLUX_TAG_VALUES \
+             INFLUX_MEASUREMENT INFLUX_FIELDS \
              MYSQL_HOST MYSQL_PORT MYSQL_USER MYSQL_PASSWORD MYSQL_DB \
              POLL_INTERVAL_SECONDS QUERY_WINDOW_SECONDS; do
       printf '%s=%s\n' "$k" "${VALS[$k]}"

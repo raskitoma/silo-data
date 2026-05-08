@@ -34,17 +34,16 @@ def _ensure_client(cfg: Config) -> InfluxDBClient:
 def _build_flux(cfg: Config) -> str:
     """Build the canonical Flux query (spec §5.3) from validated config.
 
-    Tag values are rendered as a Flux string-array literal; INFLUX_TAG_KEY
-    is interpolated as a record-accessor key. Both are regex-validated upstream.
+    Field names are rendered as a Flux string-array literal and matched via
+    contains() against r["_field"]. All inputs are regex-validated upstream.
     """
-    tag_values_literal = ", ".join(f'"{v}"' for v in cfg.influx_tag_values)
+    fields_literal = ", ".join(f'"{f}"' for f in cfg.influx_fields)
     return (
-        f'tag_values = [{tag_values_literal}]\n\n'
+        f'fields = [{fields_literal}]\n\n'
         f'from(bucket: "{cfg.influx_bucket}")\n'
         f'  |> range(start: -{cfg.query_window_seconds}s)\n'
         f'  |> filter(fn: (r) => r["_measurement"] == "{cfg.influx_measurement}")\n'
-        f'  |> filter(fn: (r) => r["_field"] == "{cfg.influx_field}")\n'
-        f'  |> filter(fn: (r) => contains(value: r["{cfg.influx_tag_key}"], set: tag_values))\n'
+        f'  |> filter(fn: (r) => contains(value: r["_field"], set: fields))\n'
         f'  |> aggregateWindow(every: {cfg.poll_interval_seconds}s, fn: mean, createEmpty: false)\n'
         f'  |> yield(name: "last")'
     )
@@ -66,9 +65,6 @@ def query_window(cfg: Config) -> list[Row]:
         for record in table.records:
             try:
                 t = record["_time"].astimezone(timezone.utc).replace(tzinfo=None)
-                tag_value = record[cfg.influx_tag_key]
-                if tag_value is None:
-                    raise KeyError(cfg.influx_tag_key)
                 value = float(record["_value"])
                 measurement = record["_measurement"]
                 field_name = record["_field"]
@@ -85,6 +81,5 @@ def query_window(cfg: Config) -> list[Row]:
                 measurement=measurement,
                 field_name=field_name,
                 field_value=value,
-                tag_value=str(tag_value),
             ))
     return rows
