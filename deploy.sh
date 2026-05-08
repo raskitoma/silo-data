@@ -208,6 +208,89 @@ write_env() {
 }
 
 preflight() {
-  local url="${VALS[INFLUX_URL]}" token="${VALS[INFLUX_TOKEN]}"
-  local mh="${VALS[MYSQL_HOST]}" mp="${VALS[MYSQL_PORT]}"
-  local mu="${VALS[MYSQL_USER]}" mw="${VALS[MYSQL_PASSWORD
+  local url token mh mp mu mw mdb
+  url="${VALS[INFLUX_URL]}"
+  token="${VALS[INFLUX_TOKEN]}"
+  mh="${VALS[MYSQL_HOST]}"
+  mp="${VALS[MYSQL_PORT]}"
+  mu="${VALS[MYSQL_USER]}"
+  mw="${VALS[MYSQL_PASSWORD]}"
+  mdb="${VALS[MYSQL_DB]}"
+
+  yellow "Pre-flight: probing Influx ${url}/health ..."
+  if ! curl -fsS --max-time 5 -H "Authorization: Token ${token}" "${url}/health" >/dev/null 2>&1; then
+    if ! curl -fsS --max-time 5 "${url}/health" >/dev/null 2>&1; then
+      die_with_code 3 "Influx /health probe FAILED. Check INFLUX_URL and connectivity."
+    fi
+  fi
+  green "  Influx /health: OK"
+
+  yellow "Pre-flight: probing MySQL ${mh}:${mp} ..."
+  if ! docker run --rm --network host \
+        -e MYSQL_PWD="${mw}" mysql:8.4 \
+        mysql -h "${mh}" -P "${mp}" -u "${mu}" -e "SELECT 1" "${mdb}" \
+        >/dev/null 2>&1; then
+    die_with_code 3 "MySQL SELECT 1 probe FAILED. Check MYSQL_* values and connectivity."
+  fi
+  green "  MySQL SELECT 1: OK"
+}
+
+state_menu() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  echo "Existing .env detected."
+  echo "  (1) Reuse existing"
+  echo "  (2) Update"
+  echo "  (3) Cancel"
+  while true; do
+    printf 'Choice [1/2/3]: '
+    local c=""; read -r c
+    case "$c" in
+      1) STATE="reuse"; return 0 ;;
+      2) STATE="update"; return 0 ;;
+      3) exit 0 ;;
+      *) yellow "  pick 1, 2, or 3" ;;
+    esac
+  done
+}
+
+main() {
+  check_deps
+  load_existing
+  state_menu
+  case "$STATE" in
+    reuse) green "Reusing existing .env" ;;
+    *)     run_prompts; write_env ;;
+  esac
+  preflight
+
+  yellow "Building image ..."
+  docker compose build
+
+  yellow "Dry-run (Influx query, no writes) ..."
+  docker compose run --rm bridge --dry-run
+
+  printf 'Proceed with deployment? (y/N): '
+  local proceed=""; read -r proceed
+  if [[ "$proceed" != "y" && "$proceed" != "Y" ]]; then
+    yellow "Aborted by user. Bridge not started."; exit 0
+  fi
+
+  yellow "Starting bridge ..."
+  docker compose up -d --build
+  docker compose ps
+  echo
+  yellow "Last 20 log lines:"
+  docker compose logs --tail 20 bridge || true
+
+  local container="${VALS[TABLE_PREFIX]}_influx_mysql_bridge"
+  yellow "Waiting for healthy status (up to 60s) ..."
+  local i=0 status=""
+  while (( i < 12 )); do
+    status="$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || echo missing)"
+    if [[ "$status" == "healthy" ]]; then green "Health: $status"; return 0; fi
+    sleep 5; i=$((i+1))
+  done
+  yellow "Health did not reach 'healthy' within 60s. Run: docker compose logs bridge"
+}
+
+main "$@"
