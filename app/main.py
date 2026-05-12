@@ -66,16 +66,16 @@ def _dry_run() -> int:
 
 
 def _notify_google_script(cfg, rows: list) -> None:
-    """POST latest per-tag levels to Google Apps Script. Best-effort; never raises."""
+    """POST latest per-field levels to Google Apps Script. Best-effort; never raises."""
     if not cfg.google_script_target_token:
         return
-    # Build payload: one key per tag value, using the row with the latest timestamp.
-    tag_latest: dict[str, tuple] = {}  # tag -> (time_recorded, field_value)
+    # Build payload: one key per field, using the row with the latest timestamp.
+    field_latest: dict[str, tuple] = {}  # field_name -> (time_recorded, field_value)
     for r in rows:
-        prev = tag_latest.get(r.tag_value)
+        prev = field_latest.get(r.field_name)
         if prev is None or r.time_recorded > prev[0]:
-            tag_latest[r.tag_value] = (r.time_recorded, r.field_value)
-    payload = {f"{tv}_level": val for tv, (_, val) in tag_latest.items()}
+            field_latest[r.field_name] = (r.time_recorded, r.field_value)
+    payload = {fn: val for fn, (_, val) in field_latest.items()}
     url = (
         f"https://script.google.com/macros/s/"
         f"{cfg.google_script_target_token}/exec"
