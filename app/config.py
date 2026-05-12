@@ -37,6 +37,7 @@ class Config:
     mysql_db: str
     poll_interval_seconds: int
     query_window_seconds: int
+    google_script_target_token: str | None
 
 
 def _fail(var: str, reason: str) -> None:
@@ -122,6 +123,10 @@ def load_config() -> Config:
     if query_window_seconds < 2 * poll_interval_seconds:
         _fail("QUERY_WINDOW_SECONDS", "range")
 
+    # Optional: Google Apps Script webhook token.
+    raw_gs_token = os.environ.get("GOOGLE_SCRIPT_TARGET_TOKEN", "").strip()
+    google_script_target_token = raw_gs_token if raw_gs_token else None
+
     return Config(
         table_prefix=table_prefix,
         influx_url=influx_url,
@@ -139,4 +144,5 @@ def load_config() -> Config:
         mysql_db=mysql_db,
         poll_interval_seconds=poll_interval_seconds,
         query_window_seconds=query_window_seconds,
+        google_script_target_token=google_script_target_token,
     )

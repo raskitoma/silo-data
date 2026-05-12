@@ -12,6 +12,8 @@ import json
 import signal
 import sys
 import time
+import urllib.request
+import urllib.error
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -63,6 +65,34 @@ def _dry_run() -> int:
     return 0
 
 
+def _notify_google_script(cfg, rows: list) -> None:
+    """POST latest per-tag levels to Google Apps Script. Best-effort; never raises."""
+    if not cfg.google_script_target_token:
+        return
+    # Build payload: one key per tag value, using the row with the latest timestamp.
+    tag_latest: dict[str, tuple] = {}  # tag -> (time_recorded, field_value)
+    for r in rows:
+        prev = tag_latest.get(r.tag_value)
+        if prev is None or r.time_recorded > prev[0]:
+            tag_latest[r.tag_value] = (r.time_recorded, r.field_value)
+    payload = {f"{tv}_level": val for tv, (_, val) in tag_latest.items()}
+    url = (
+        f"https://script.google.com/macros/s/"
+        f"{cfg.google_script_target_token}/exec"
+    )
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=data, method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            log("google_script_sent", status=resp.status, payload=payload)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        log("error", level="error", event_subtype="google_script",
+            error_msg=str(e))
+
+
 def run() -> int:
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
@@ -94,6 +124,7 @@ def run() -> int:
                     latest=last_t.isoformat(),
                     per_tag=dict(per_tag))
                 _log_mod.reset_error_rate_limit()
+                _notify_google_script(cfg, rows)
             else:
                 log("idle", window_s=cfg.query_window_seconds)
             _write_heartbeat(last_t)

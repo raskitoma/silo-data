@@ -105,6 +105,18 @@ prompt_tag_values() {
   local IFS_BAK="$IFS"; IFS=','; VALS[INFLUX_TAG_VALUES]="${values[*]}"; IFS="$IFS_BAK"
 }
 
+prompt_optional_secret() {
+  local var="$1" label="$2"
+  local current="${VALS[$var]:-}" hint="" val=""
+  if [[ -n "$current" ]]; then
+    hint=" [$(mask "$current")]"
+  fi
+  printf '%s%s (Enter to skip): ' "$label" "$hint" >&2
+  read -rs val; printf '\n' >&2
+  if [[ -z "$val" && -n "$current" ]]; then val="$current"; fi
+  VALS[$var]="${val:-}"
+}
+
 run_prompts() {
   prompt_value TABLE_PREFIX        "TABLE_PREFIX (e.g. silo_farm_a)"  "$RE_PREFIX"
   prompt_value INFLUX_URL          "INFLUX_URL (https://host:8086)"   "$RE_URL"
@@ -126,6 +138,7 @@ run_prompts() {
   if (( win < 2 * poll )); then
     die_with_code 2 "QUERY_WINDOW_SECONDS must be >= 2 * POLL_INTERVAL_SECONDS"
   fi
+  prompt_optional_secret GOOGLE_SCRIPT_TARGET_TOKEN "GOOGLE_SCRIPT_TARGET_TOKEN (optional)"
 }
 
 write_env() {
@@ -141,6 +154,7 @@ write_env() {
              POLL_INTERVAL_SECONDS QUERY_WINDOW_SECONDS; do
       printf '%s=%s\n' "$k" "${VALS[$k]}"
     done
+    printf 'GOOGLE_SCRIPT_TARGET_TOKEN=%s\n' "${VALS[GOOGLE_SCRIPT_TARGET_TOKEN]:-}"
     printf 'COMPOSE_PROJECT_NAME=%s\n' "${VALS[TABLE_PREFIX]}"
   } > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
