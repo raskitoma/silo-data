@@ -4,7 +4,6 @@ query_window() returns a list of Row; never raises to caller. All errors
 become rate-limited JSON log lines and either skip the offending record
 (parse/cast errors) or return [] (transport errors).
 """
-from datetime import timezone
 
 import urllib3.exceptions
 from influxdb_client import InfluxDBClient
@@ -64,7 +63,7 @@ def query_window(cfg: Config) -> list[Row]:
     for table in tables:
         for record in table.records:
             try:
-                t = record["_time"].astimezone(timezone.utc).replace(tzinfo=None)
+                t = record["_time"].astimezone(cfg.tz).replace(tzinfo=None)
                 value = float(record["_value"])
                 measurement = record["_measurement"]
                 field_name = record["_field"]

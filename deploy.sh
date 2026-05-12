@@ -192,12 +192,9 @@ run_prompts() {
   prompt_value MYSQL_PASSWORD      "MYSQL_PASSWORD"                         ""              secret
   prompt_value MYSQL_DB            "MYSQL_DB"                               ""
   prompt_int   POLL_INTERVAL_SECONDS "POLL_INTERVAL_SECONDS"                5 3600 10
-  prompt_int   QUERY_WINDOW_SECONDS  "QUERY_WINDOW_SECONDS"                 1 86400 20
-
-  local poll="${VALS[POLL_INTERVAL_SECONDS]}" win="${VALS[QUERY_WINDOW_SECONDS]}"
-  if (( win < 2 * poll )); then
-    die_with_code 2 "QUERY_WINDOW_SECONDS must be >= 2 * POLL_INTERVAL_SECONDS"
-  fi
+  VALS[QUERY_WINDOW_SECONDS]=$(( VALS[POLL_INTERVAL_SECONDS] * 2 ))
+  dim "  → QUERY_WINDOW_SECONDS auto-set to ${VALS[QUERY_WINDOW_SECONDS]}"
+  prompt_value TZ "TZ (timezone, e.g. America/Chicago)" ""
   prompt_optional_value GOOGLE_SCRIPT_TARGET_TOKEN "GOOGLE_SCRIPT_TARGET_TOKEN (optional)"
 }
 
@@ -211,7 +208,7 @@ write_env() {
     for k in TABLE_PREFIX INFLUX_URL INFLUX_TOKEN INFLUX_ORG INFLUX_BUCKET \
              INFLUX_MEASUREMENT INFLUX_FIELDS \
              MYSQL_HOST MYSQL_PORT MYSQL_USER MYSQL_PASSWORD MYSQL_DB \
-             POLL_INTERVAL_SECONDS QUERY_WINDOW_SECONDS; do
+             POLL_INTERVAL_SECONDS QUERY_WINDOW_SECONDS TZ; do
       printf '%s=%s\n' "$k" "${VALS[$k]}"
     done
     printf 'GOOGLE_SCRIPT_TARGET_TOKEN=%s\n' "${VALS[GOOGLE_SCRIPT_TARGET_TOKEN]:-}"

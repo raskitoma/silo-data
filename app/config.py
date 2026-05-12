@@ -7,6 +7,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 # Identifier regex — used for TABLE_PREFIX. Must end in [a-z0-9] so that
@@ -34,6 +35,7 @@ class Config:
     mysql_db: str
     poll_interval_seconds: int
     query_window_seconds: int
+    tz: ZoneInfo
     google_script_target_token: str | None
 
 
@@ -114,6 +116,14 @@ def load_config() -> Config:
     if query_window_seconds < 2 * poll_interval_seconds:
         _fail("QUERY_WINDOW_SECONDS", "range")
 
+    # Timezone for timestamp conversion.
+    tz_name = _required("TZ")
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, KeyError):
+        _fail("TZ", f"unknown_timezone:{tz_name}")
+        tz = ZoneInfo("UTC")  # unreachable; satisfies type checker
+
     # Optional: Google Apps Script webhook token.
     raw_gs_token = os.environ.get("GOOGLE_SCRIPT_TARGET_TOKEN", "").strip()
     google_script_target_token = raw_gs_token if raw_gs_token else None
@@ -133,5 +143,6 @@ def load_config() -> Config:
         mysql_db=mysql_db,
         poll_interval_seconds=poll_interval_seconds,
         query_window_seconds=query_window_seconds,
+        tz=tz,
         google_script_target_token=google_script_target_token,
     )
