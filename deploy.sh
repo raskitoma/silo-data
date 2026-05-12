@@ -159,14 +159,14 @@ prompt_fields() {
   echo "" >&2
 }
 
-prompt_optional_secret() {
+prompt_optional_value() {
   local var="$1" label="$2"
   local current="${VALS[$var]:-}" hint="" val=""
   if [[ -n "$current" ]]; then
-    hint=" [$(mask "$current")]"
+    hint=" [$current]"
   fi
   printf '%s%s (Enter to skip): ' "$label" "$hint" >&2
-  read -rs val; printf '\n' >&2
+  read -r val
   if [[ -z "$val" && -n "$current" ]]; then val="$current"; fi
   VALS[$var]="${val:-}"
 }
@@ -198,7 +198,7 @@ run_prompts() {
   if (( win < 2 * poll )); then
     die_with_code 2 "QUERY_WINDOW_SECONDS must be >= 2 * POLL_INTERVAL_SECONDS"
   fi
-  prompt_optional_secret GOOGLE_SCRIPT_TARGET_TOKEN "GOOGLE_SCRIPT_TARGET_TOKEN (optional)"
+  prompt_optional_value GOOGLE_SCRIPT_TARGET_TOKEN "GOOGLE_SCRIPT_TARGET_TOKEN (optional)"
 }
 
 write_env() {
