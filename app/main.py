@@ -60,8 +60,8 @@ def _dry_run() -> int:
     for r in rows[:10]:
         print(r)
     print(f"TOTAL_ROWS={len(rows)}")
-    tags_seen = sorted({r.tag_value for r in rows})
-    print(f"TAGS_SEEN={','.join(tags_seen)}")
+    fields_seen = sorted({r.field_name for r in rows})
+    print(f"FIELDS_SEEN={','.join(fields_seen)}")
     return 0
 
 
@@ -103,11 +103,11 @@ def run() -> int:
     last_t: datetime | None = None
     log("started",
         prefix=cfg.table_prefix,
-        tag_key=cfg.influx_tag_key,
-        tag_values=list(cfg.influx_tag_values),
+        measurement=cfg.influx_measurement,
+        fields=list(cfg.influx_fields),
         poll=cfg.poll_interval_seconds,
         window=cfg.query_window_seconds)
-    _write_heartbeat(None)  # initial heartbeat so HEALTHCHECK starts green
+    _write_heartbeat(None)
 
     while not _terminate:
         t0 = time.monotonic()
@@ -118,11 +118,11 @@ def run() -> int:
             if rows:
                 n = db.insert_rows(cfg, rows)
                 last_t = max(r.time_recorded for r in rows)
-                per_tag = Counter(r.tag_value for r in rows)
+                per_field = Counter(r.field_name for r in rows)
                 log("inserted",
                     count=n,
                     latest=last_t.isoformat(),
-                    per_tag=dict(per_tag))
+                    per_field=dict(per_field))
                 _log_mod.reset_error_rate_limit()
                 _notify_google_script(cfg, rows)
             else:

@@ -1,8 +1,20 @@
 # silo-data — InfluxDB → MySQL Bridge
 
-A small Dockerised Python daemon that polls an InfluxDB 2.x bucket every 10 seconds, fans out across the configured silo tag values, and writes the per-window mean of one `(measurement, field)` pair into a MySQL/MariaDB table — one row per silo per poll.
+A small Dockerised Python daemon that polls an InfluxDB 2.x bucket every 10 seconds, fans out across the configured **field allowlist**, and writes the per-window mean of each field into a MySQL/MariaDB table — one row per `(measurement, field)` per poll.
 
 Operator-confirmed environment: **Ubuntu 22.04/24.04 LTS** host, **MySQL 8.4 LTS** target, **InfluxDB 2.x** source, **host LAN networking** (no docker-network indirection).
+
+## Data model
+
+The bridge handles a single Influx **measurement** and a configurable list of **fields** under it. There are no tag dimensions in scope — the row's `field_name` is the dimension. If your Influx data looks like this:
+
+```
+measurement=Silo  _field=wheat_level         _value=42.7   _time=…
+measurement=Silo  _field=white_corn_level    _value=58.2   _time=…
+measurement=Silo  _field=yellow_corn_level   _value=33.1   _time=…
+```
+
+…you set `INFLUX_MEASUREMENT=Silo` and `INFLUX_FIELDS=wheat_level,white_corn_level,yellow_corn_level`, and the bridge writes one MySQL row per field per poll.
 
 ## Important: schema ownership
 
@@ -12,7 +24,7 @@ The bridge **only ever** issues these statements against the target database:
 - `SELECT … FROM information_schema.COLUMNS …` (schema verification on startup)
 - `INSERT IGNORE INTO …` (the data writes)
 
-The bridge **never** issues `DROP`, `TRUNCATE`, `DELETE`, or `ALTER`. If the existing table's schema does not match the configured `INFLUX_TAG_KEY` (because an admin changed the tag key between deploys), the bridge fails fast with a clear error and refuses to start. Reset is performed manually by the database admin (see [Reset](#reset)).
+The bridge **never** issues `DROP`, `TRUNCATE`, `DELETE`, or `ALTER`. If the existing table is missing required columns, the bridge fails fast with a clear error and refuses to start. Reset is performed manually by the database admin (see [Reset](#reset)).
 
 ## Quickstart
 
@@ -45,10 +57,8 @@ docker exec "${TABLE_PREFIX}_influx_mysql_bridge" cat /tmp/last_poll.json
 | `INFLUX_TOKEN` | yes | — | length ≥ 16; redacted in logs |
 | `INFLUX_ORG` | yes | — | |
 | `INFLUX_BUCKET` | yes | — | |
-| `INFLUX_MEASUREMENT` | yes | — | |
-| `INFLUX_FIELD` | yes | — | single field — multi-field is out of scope |
-| `INFLUX_TAG_KEY` | yes | — | regex `^[a-z][a-z0-9_]{0,30}$`; also the MySQL column name |
-| `INFLUX_TAG_VALUES` | yes | — | comma-separated allowlist, 1–64 entries |
+| `INFLUX_MEASUREMENT` | yes | — | single measurement name |
+| `INFLUX_FIELDS` | yes | — | comma-separated allowlist, 1–64 entries |
 | `MYSQL_HOST` | yes | — | |
 | `MYSQL_PORT` | no | `3306` | |
 | `MYSQL_USER` | yes | — | |
@@ -58,11 +68,11 @@ docker exec "${TABLE_PREFIX}_influx_mysql_bridge" cat /tmp/last_poll.json
 | `QUERY_WINDOW_SECONDS` | no | `20` | int ≥ 2 × `POLL_INTERVAL_SECONDS` |
 | `COMPOSE_PROJECT_NAME` | auto | `${TABLE_PREFIX}` | set by `deploy.sh` |
 
-`INFLUX_TAG_VALUES` is an explicit allowlist. New silos require an env update + restart — the bridge does not auto-discover.
+`INFLUX_FIELDS` is an explicit allowlist. New fields require an env update + restart — the bridge does not auto-discover.
 
 ## Schema
 
-The bridge creates this table on first start (`<pre>` is `${TABLE_PREFIX}`, `<tag>` is `${INFLUX_TAG_KEY}`):
+The bridge creates this table on first start (`<pre>` is `${TABLE_PREFIX}`):
 
 ```sql
 CREATE TABLE IF NOT EXISTS `<pre>_ingest_data` (
@@ -71,15 +81,28 @@ CREATE TABLE IF NOT EXISTS `<pre>_ingest_data` (
     measurement     VARCHAR(255)  NOT NULL,
     field_name      VARCHAR(255)  NOT NULL,
     field_value     DOUBLE        NOT NULL,
-    `<tag>`         VARCHAR(64)   NOT NULL,
     created_at      TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    UNIQUE KEY uq_point (time_recorded, measurement, field_name, `<tag>`),
+    UNIQUE KEY uq_point (time_recorded, measurement, field_name),
     KEY idx_time (time_recorded),
-    KEY idx_tag_time (`<tag>`, time_recorded)
+    KEY idx_field_time (field_name, time_recorded)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
 `time_recorded` is **UTC, timezone-naive** — Influx returns UTC, MySQL `DATETIME(6)` is naive, downstream consumers should not reinterpret. Influx nanoseconds are truncated to MySQL microseconds.
+
+The data lands in **tall format** — one row per `(time, measurement, field_name)`. To query it as a wide table, pivot at read time:
+
+```sql
+SELECT time_recorded,
+       MAX(CASE WHEN field_name = 'wheat_level'        THEN field_value END) AS wheat_level,
+       MAX(CASE WHEN field_name = 'white_corn_level'   THEN field_value END) AS white_corn_level,
+       MAX(CASE WHEN field_name = 'yellow_corn_level'  THEN field_value END) AS yellow_corn_level
+FROM `silo_farm_a_ingest_data`
+WHERE measurement = 'Silo'
+GROUP BY time_recorded
+ORDER BY time_recorded DESC
+LIMIT 100;
+```
 
 ## Operations
 
@@ -94,7 +117,7 @@ docker exec "${TABLE_PREFIX}_influx_mysql_bridge" cat /tmp/last_poll.json
 # Restart (compose handles graceful SIGTERM, ≤15s)
 docker compose restart bridge
 
-# Update env values
+# Update env values (e.g. add a new field to INFLUX_FIELDS)
 ./deploy.sh   # choose (2) Update; previous .env is auto-backed up to .env.bak.<unix-ts>
 
 # Stop
@@ -117,9 +140,9 @@ The healthcheck reads `/tmp/last_poll.json`; if its mtime is older than 30 s the
 
 ## Reset
 
-The bridge will not modify or drop existing tables. If `INFLUX_TAG_KEY` changes between deploys (e.g. you switch from `silo` to `location`), the existing table's tag column will not match — the bridge logs a `db_init` error and exits 2 instead of starting.
+The bridge will not modify or drop existing tables. If the existing table is missing required columns, the bridge logs a `db_init` error and exits 2 instead of starting.
 
-Manual reset, performed by the database admin:
+Manual reset, performed by the database admin only:
 
 ```bash
 docker compose down
@@ -146,12 +169,12 @@ This is intentionally a manual step. The source of truth lives in Influx; recrea
 *Diagnose:* MySQL 8.4 defaults to `caching_sha2_password`; the connector supports it but the user must be created with a compatible plugin.
 *Fix:* `ALTER USER '<user>'@'%' IDENTIFIED WITH caching_sha2_password BY '<pass>';` from a privileged session.
 
-**Symptom:** `event_subtype=db_init` log line says `existing table … has no such column` for your `INFLUX_TAG_KEY`.
-*Diagnose:* `INFLUX_TAG_KEY` was changed between deploys; the existing table has the old tag column.
+**Symptom:** `event_subtype=db_init` log line says `existing table … is missing columns`.
+*Diagnose:* The table existed with a different schema (e.g. an older spec).
 *Fix:* see [Reset](#reset). The bridge will never `ALTER` a live table.
 
-**Symptom:** One silo never appears in MySQL but does appear in Influx.
-*Diagnose:* `SELECT DISTINCT \`<tag>\` FROM \`<pre>_ingest_data\`;` — if the silo is missing, check `INFLUX_TAG_VALUES`.
+**Symptom:** One field never appears in MySQL but does in Influx.
+*Diagnose:* `SELECT DISTINCT field_name FROM \`<pre>_ingest_data\`;` — if the field is missing, check `INFLUX_FIELDS`.
 *Fix:* update the env, run `./deploy.sh` → `(2) Update` → confirm; the bridge restarts and picks up the new allowlist.
 
 **Symptom:** `Health.Status: unhealthy` while the container is `Up`.
@@ -170,21 +193,4 @@ Both the watermark filter and the Flux `range(start: -Ns)` rely on the host cloc
 ```
 .
 ├── app/
-│   ├── main.py            # Loop (signal-safe), heartbeat, dry-run
-│   ├── db.py              # Pool, ensure_table, schema verify, chunked INSERT IGNORE
-│   ├── influx.py          # Flux query + Row mapping
-│   ├── config.py          # Env validation; SystemExit(2) on bad input
-│   ├── log.py             # JSON-line logger + 60s error rate-limit
-│   ├── requirements.txt
-│   └── Dockerfile
-├── deploy.sh              # Wizard with preflight probes and .env backup
-├── docker-compose.yml
-├── .env.example
-├── README.md
-├── SPEC.md                # Full specification (binding)
-└── VERIFICATION.md        # M2–M4 PASS CRITERIA the operator must run on the live stack
-```
-
-## License
-
-Internal — easyfoods.
+│   ├── main.py          
